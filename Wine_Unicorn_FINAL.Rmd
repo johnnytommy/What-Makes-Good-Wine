@@ -1,0 +1,1377 @@
+---
+title: "What Makes Good Wine?"
+author: "The Unicorn: Johnny Thomas, Julia Greenberg, Iswa Wasif, Utkarsh Nigam, Zoey Zhao"
+date: "5/3/2020"
+output:  
+    rmdformats::readthedown:
+      toc_float: true
+      number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = F, results = TRUE, message = F)
+options(scientific=T, digits = 3) 
+```
+
+```{r basic, include=F}
+loadPkg = function(pkg, character.only = FALSE) { 
+  if (!character.only) { pkg <- as.character(substitute(pkg)) }
+  pkg <- ifelse(!character.only, as.character(substitute(pkg)) , pkg)  
+  if (!require(pkg,character.only=T, quietly =T)) {  install.packages(substitute(pkg),dep=T); if(!require(pkg,character.only=T)) stop("Package not found") } 
+}
+loadPkg(knitr)
+
+# unload/detact package when done using it
+unloadPkg = function(pkg, character.only = FALSE) { 
+  if(!character.only) { pkg <- as.character(substitute(pkg)) } 
+  search_item <- paste("package", pkg,sep = ":") 
+  while(search_item %in% search()) { detach(search_item, unload = TRUE, character.only = TRUE) } 
+}
+```
+
+```{r xkablesummary, include=FALSE}
+loadPkg(xtable)
+loadPkg(kableExtra)
+loadPkg(stringi)
+
+xkabledply = function(modelsmmrytable, title="Table", digits = 4, pos="left", bso="striped") { 
+  #' Combining base::summary, xtable, and kableExtra, to easily display model summary. 
+  #' wrapper for the base::summary function on model objects
+  #' ELo 202004 GWU DATS
+  #' version 1.2
+  #' @param modelsmmrytable This can be a generic table, a model object such as lm(), or the summary of a model object summary(lm()) 
+  #' @param title Title of table. 
+  #' @param digits Number of digits to display
+  #' @param pos Position of table, c("left","center","right") 
+  #' @param bso bootstrap_options = c("basic", "striped", "bordered", "hover", "condensed", "responsive")
+  #' @return HTML table for display
+  #' @examples
+  #' library("xtable")
+  #' library("kableExtra")
+  #' xkabledply( df, title="Table testing", pos="left", bso="hover" )
+  modelsmmrytable %>%
+    xtable() %>% 
+    kable(caption = title, digits = digits) %>%
+    kable_styling(bootstrap_options = bso, full_width = FALSE, position = pos)
+}
+
+xkablesummary = function(df, title="Table: Statistics summary.", digits = 4, pos="left", bso="striped") { 
+  #' Combining base::summary, xtable, and kableExtra, to easily display numeric variable summary of dataframes. 
+  #' ELo 202004 GWU DATS
+  #' version 1.2
+  #' @param df The dataframe.
+  #' @param title Title of table. 
+  #' @param digits Number of digits to display
+  #' @param pos Position of table, c("left","center","right") 
+  #' @param bso bootstrap_options = c("basic", "striped", "bordered", "hover", "condensed", "responsive")
+  #' @return The HTML summary table for display, or for knitr to process into other formats 
+  #' @examples
+  #' xkablesummary( faraway::ozone )
+  #' xkablesummary( ISLR::Hitters, title="Five number summary", pos="left", bso="hover"  )
+  
+  s = summary(df) %>%
+    apply( 2, function(x) stringr::str_remove_all(x,c("Min.\\s*:\\s*","1st Qu.\\s*:\\s*","Median\\s*:\\s*","Mean\\s*:\\s*","3rd Qu.\\s*:\\s*","Max.\\s*:\\s*")) ) %>% # replace all leading words
+    apply( 2, function(x) stringr::str_trim(x, "right")) # trim trailing spaces left
+  
+  colnames(s) <- stringr::str_trim(colnames(s))
+  
+  if ( dim(s)[1] ==6 ) { rownames(s) <- c('Min','Q1','Median','Mean','Q3','Max') 
+  } else if ( dim(s)[1] ==7 ) { rownames(s) <- c('Min','Q1','Median','Mean','Q3','Max','NA') }
+  
+  xkabledply(s, title=title, digits = digits, pos=pos, bso=bso )
+}
+
+xkablevif = function(model, title="VIFs of the model", digits = 3, pos="left", bso="striped") { 
+  #' Combining faraway::vif, xtable, and kableExtra, to easily display numeric summary of VIFs for a model. 
+  #' ELo 202004 GWU DATS
+  #' version 1.2
+  #' @param model The lm or compatible model object.
+  #' @param title Title of table. 
+  #' @param digits Number of digits to display
+  #' @param pos Position of table, c("left","center","right") 
+  #' @param bso bootstrap_options = c("basic", "striped", "bordered", "hover", "condensed", "responsive")
+  #' @return The HTML summary table of the VIFs for a model for display, or for knitr to process into other formats 
+  #' @examples
+  #' xkablevif( lm(Salary~Hits+RBI, data=ISLR::Hitters) )
+  
+  vifs = table( names(model$coefficients)[2:length(model$coefficients)] ) # remove intercept to set column names
+  vifs[] = faraway::vif(model) # set the values
+  xkabledply( vifs, title=title, digits = digits, pos=pos, bso=bso )
+}
+
+```
+
+```{r base_lib, include=FALSE}
+#all packages
+loadPkg(readr)
+loadPkg(rmdformats)
+loadPkg(tidyverse)
+#loadPkg(gt)
+loadPkg(factoextra)
+loadPkg(Compositional)
+loadPkg(dplyr)
+loadPkg(regclass)
+loadPkg(pROC) 
+loadPkg(FNN)
+loadPkg(gmodels)
+loadPkg(caret)
+loadPkg(rpart)
+loadPkg(rattle)
+loadPkg(gridExtra)
+loadPkg(ggplot2)
+```
+
+# Introduction
+
+In this paper, we examine a dataset containing information about different kinds of wines to understand the relationship between the chemical makeup, type, and quality of wine. We seek to answer two SMART questions:
+
+1. Can we classify the type of wine (red or white) given its chemical makeup?
+2. Can we predict the quality of a certain type of wine (white or red) given its chemical makeup?
+
+First, we include some exploratory data analysis (EDA) to better understand our data. To answer our SMART questions, we then conduct a variety of analyses, including K-means, Principal Component Analysis and Regression, Logistic Regression, KNN, Decision Trees, and Random Forests. We repeat all of these analyses three times: once to answer SMART question #1, once to answer SMART question #2 for red wine, and once to answer SMART question #2 for white wine. We then compare the accuracy of these analyses to understand which one results in the most accurate classification.
+
+## The Data
+
+The variables in the original data are: type, fixed acidity, volatile acidity, citric acid, residual sugar, chlorides, free sulfur dioxide, total sulfur dioxide, density, pH, sulphates, alcohol, and quality (on a scale from 1-10).  
+Below is the structure of the dataset and the statistical summary of the numerical variables:  
+
+```{r, echo=FALSE}
+summary_data <- na.omit(read.csv("final_data_wine.csv"))
+str(summary_data[,2:14])
+xkablesummary(summary_data[,3:13])
+```
+
+
+Below is how the quality rating of wine varies with alcohol content:
+
+```{r, echo=FALSE}
+box_plot_quality <- ggplot(summary_data, aes(x = as.factor(quality), y = alcohol)) +
+  scale_y_continuous(name = "Alcohol Content")+
+  scale_x_discrete(name = "Quality Rating") +
+  geom_boxplot(fill = "Orange", colour = "red",
+               alpha = 0.5, outlier.colour = "red", outlier.shape = 19) + 
+  theme_bw() + 
+  ggtitle("Boxplot: Alcohol Content w.r.t. Quality Ratigs")
+box_plot_quality
+
+```
+
+We can observe from the plot above that as the alcohol content increases, the quality ratings of the wine also increases.
+
+
+Below is how the Good Vs Bad of wines differ with alcohol content:
+```{r, echo=FALSE}
+box_plot_categpries <- ggplot(summary_data, aes(x = quality_6, y = alcohol)) +
+  scale_y_continuous(name = "Alcohol Content")+
+  scale_x_discrete(name = "Good Vs Bad") +
+  geom_boxplot(fill = "Orange", colour = "red",
+               alpha = 0.5, outlier.colour = "red", outlier.shape = 19) + 
+  theme_bw() + 
+  ggtitle("Boxplot: Alcohol Content of Good/Bad Wine")
+box_plot_categpries
+
+```
+
+
+# Classifying Wine Type
+
+
+## K-Means
+
+Before building the actual models, it's important to detect potential patterns in the data using K-Means clustering.
+
+```{r, echo=FALSE}
+#Model 1
+data <- na.omit(read.csv("wine_quality.csv"))
+
+
+#Normalization function
+nor <-function(x) {
+  (x -min(x))/(max(x)-min(x))
+}                 
+
+#Accuracy function
+accuracy <- function(x){
+  sum(diag(x)/(sum(rowSums(x)))) * 100
+}   
+
+#Precision function
+precision <- function(x){
+  x[2,2]/(x[2,2]+x[1,2])
+}                
+
+#Normalize the data
+type<-data$type
+data <- as.data.frame(lapply(data[,c(2:13)], nor))
+data <- cbind(data,type)
+data$type<-as.factor(data$type)
+
+
+#Model 2+3
+data2 <- data #Make sure the data is normalized before you proceed.
+data2$quality_6 <-"bad"
+data2$quality_6[data2$quality>=6] <- "good"
+
+
+data <- data %>% 
+  select(-type)
+
+data2 <- data %>% 
+  scale()
+
+#We know it's 4
+fviz_nbclust(data2,FUNcluster = kmeans)
+
+```
+
+Here we see that this data works best in four clusters. 
+
+```{r, echo=FALSE}
+set.seed(123)
+km.res <- kmeans(data2, 4, nstart = 25)
+
+fviz_cluster(km.res,data2) 
+
+```
+
+
+From this we see Dimension 1 seperates clusters 1 & 4 from clusters 2 & 3. Dimension 2 seperates clusters 1 & 2 from clusters 3 & 4. There is a lot of overlap in the center however there is in fact a clear patten occuring here.
+
+## PCA
+
+```{r, include=FALSE}
+PCAxform <- function(df, z=TRUE) { 
+  #' Obtain the dataframe with the Principal Components after the rotation. 
+  #' ELo 201911 GWU DATS
+  #' @param df The dataframe.
+  #' @param z T/F or 0/1 for z-score to be used
+  #' @return The transformed dataframe.
+  #' @examples
+  #' tmp = PCAxform(USArrests,TRUE)
+
+  z = ifelse(z==TRUE || z=="true" || z=="True" || z=="T" || z=="t" || z==1 || z=="1", TRUE, FALSE) # standardize z 
+  if(z) { df = data.frame(scale(df))}  # scale not safe for non-numeric colunms, but PCA requires all variables numerics to begin with.
+  pr.out = prcomp(df,scale=z)
+  df1 = data.frame( as.matrix(df) %*% pr.out$rotation ) # use matrix multiplication in R:  %*% 
+  return(df1)
+}
+# Sample 
+# USArrests.z.pc = PCAxform(USArrests,TRUE)
+# summary(USArrests.z.pc)
+
+PCRxform <- function(df, y, zX=TRUE, zy=FALSE) { 
+  #' Obtain the dataframe with the Principal Components after the rotation for PCRegression. Requires related function PCAxform()
+  #' ELo 201903 GWU DATS
+  #' @param df The dataframe.
+  #' @param y The y-variable column index number(int), or the name of y-variable
+  #' @param zX T/F or 0/1 for z-score used on X-variables
+  #' @param zy T/F or 0/1 for z-score used on the target y-variable
+  #' @return The transformed dataframe.
+  #' @examples
+  #' tmp = PCAxform(USArrests,TRUE)
+
+  # take care of y target
+  zy = ifelse(zy==TRUE || zy=="true" || zy=="True" || zy=="T" || zy=="t" || zy==1 || zy=="1", TRUE, FALSE) # standardize target y
+  if( is.integer(y) ) { # y is integer
+    if( y>length(df) || y<1 ) {
+      print("Invalid column number")
+      return(NULL)
+    }
+    if(zy) { df1 = data.frame( scale(df[y]) ) } else { df1 = df[y] } # save y-var in df1
+    df = df[-y] # remove y-variable in df
+  } else { # y is not integer, so interpret as name
+    if(zy) { df1 = data.frame( scale( df[names(df) == y] ) ) } else { df1 = df[names(df) == y] }
+    df = df[names(df) != y] # remove y-variable in df
+  }
+  if( length(df1)<1 ) {
+    print("Variable name not found in data.frame")
+    return(NULL)
+  }
+  # now transform X-vars
+  zX = ifelse(zX==TRUE || zX=="true" || zX=="True" || zX=="T" || zX=="t" || zX==1 || zX=="1", TRUE, FALSE) # standardize X-vars 
+  df2 = PCAxform(df,zX)
+  df1 = data.frame(df1,df2) # piece them back together
+  return(df1)
+}
+```
+
+First, we subset the data to only include the numeric variables. This excludes wine type (red/white) as well as quality, which is a binary variable in our case.
+
+```{r, include=FALSE}
+# Load the data
+wine <- read.csv("final_data_wine.csv")
+head(wine)
+dim(wine)
+
+# Find rows with missing values
+wine_NAs <- wine[!complete.cases(wine),]
+dim(wine_NAs) # 0 rows
+```
+
+```{r, include=FALSE}
+# Get rid of rows with missing values
+# wine <- wine[complete.cases(wine),]
+# dim(wine)
+
+# Create subset of only numeric variables
+wine_num <- wine[,3:13]
+head(wine_num)
+```
+
+```{r, include=FALSE}
+# Look at correlation & covariance matrix:
+cor(wine_num)
+cov(wine_num)
+
+# Scale the data, then look again:
+winescale = data.frame(scale(wine_num))
+cor(winescale)
+cov(winescale)
+```
+
+After scaling the data, we created principal components out of the variables and looked at the distribution of each one:
+
+```{r, echo=FALSE}
+# Get the principal components:
+pr.wine <- prcomp(winescale, scale=FALSE) # already scaled the data
+summary(pr.wine)
+```
+
+We also looked at how the variables make up each component:
+
+```{r, echo=FALSE}
+pr.wine$rotation
+```
+
+Using biplots is another way to see how the different variables make up each component. Here are a few examples:
+
+```{r, echo=FALSE}
+biplot(pr.wine, scale=0)
+biplot(pr.wine, 2:3, scale=0)
+biplot(pr.wine, 3:4, scale=0)
+```
+
+We can also plot the cumulative proportion of variance explained by the principal components:
+
+```{r, echo=FALSE}
+# Plot cumulative proportion of variance explained
+pr.wine.var <- (pr.wine$sdev^2)
+pve.wine <- pr.wine.var/sum(pr.wine.var)
+plot(cumsum(pve.wine), xlab="Principal Component (standardized)", ylab ="Cumulative Proportion of Variance Explained",ylim=c(0,1),type="b")
+```
+
+With 8 principal components, about 95% of the variance is explained. After this, the curve starts to level off, so including these first 8 components in a model is sufficient.
+
+## PCR
+
+Finally, we created a PCR model with these 8 components. The model predicts whether the wine is white or red - a binary variable - so it uses logistic regression.
+
+```{r, echo=FALSE}
+
+# Add 'type' back in
+wine_w_type <- cbind(winescale,wine$type)
+
+# Rename 'type' variable
+wine_w_type <- wine_w_type %>% rename(type=`wine$type`)
+
+# Do PCR on first 8 components
+type_pcr <- PCRxform(wine_w_type,"type")
+type_pcr_sub <- type_pcr[,1:9] # only keep first 8 PCs
+type_pcreg <- glm(type ~ ., data=type_pcr_sub, family="binomial")
+xkabledply(type_pcreg)
+```
+
+## Logistic Regression
+
+We then created a full logistic regression model, using the same variables from the original data (again excluding wine quality, since it is a categorical variable and is therefore not included in our PCR):
+
+```{r, echo=FALSE}
+type_new <- wine %>% select(-c(X,quality,quality_6,label))
+typeLogit <- glm(type ~ ., data=type_new, family="binomial")
+xkabledply(typeLogit)
+```
+
+The results of this logistic model reveal some interesting relationships between chemical composition and wine type. It appears red and white wine are clearly distinguishable along these characteristics, since we see statistically signigifcant coefficients for most of the variables with the exception of fixed acidity and pH. The positive coefficients indicate features which increase the log likelihood of the wine being 'white'; an increase in citric acid, residual sugar and total sulfur dioxide levels all increase the likelihood of white classification. On the other hand, the negative coefficients on volatile acidity, chlorides, free sulfur dioxide, density, suplphates and alcohol levels all point towards a higher log likelihood of the wine not being white, in which case it is classified as red. 
+
+This allowed us to compare the PCR model with the full logistic regression model by using different model evaluation techniques. For example, based on the regression results, the AIC for the full model is lower than for the PCR model (`r round(typeLogit$aic,1)` vs. `r round(type_pcreg$aic,1)`), indicating a better fit. In addition, using the confusion matrices below, we calculated the accuracy of each model:
+
+```{r, echo=FALSE, message=FALSE}
+# Confusion matrices
+confusion_matrix(type_pcreg)
+confusion_matrix(typeLogit)
+```
+
+```{r, include=FALSE, message=FALSE}
+# Calculate accuracy
+type_PCR_acc <- (1551+4831)/6463
+type_log_acc <- (1575+4855)/6463
+type_PCR_acc
+type_log_acc
+```
+
+The accuracy of the PCR model is `r round(type_PCR_acc,3)`, while the accuracy of the full logistic regression model is slightly higher, at `r round(type_log_acc,3)`. This reinforces our finding that the full model is a better fit.
+
+We now look at some other model evaluation metrics for the full logistic regression model. 
+
+**Model Evaluation for Logistic Regression**
+
+```{r, echo=FALSE}
+prob=predict(typeLogit, type = c("response"))
+wine$prob=prob
+h <- roc(type~prob, data=wine)
+auc(h) # area-under-curve prefer 0.8 or higher.
+plot(h)
+# unloadPkg(pROC) 
+```
+We look at the  Area Under Curve (AOC) for this model, which measures the sensitivity against the specificity. The AOC comes out to be very high at 99.6%. Therefore this logistic regression model is a good fit for classiying wine type.
+Next, we look at the McFadden value for this regression. 
+
+```{r , echo=FALSE}
+NullLogit <- glm(type ~ 1, data = wine, family = "binomial")
+mcFadden = 1 - logLik(typeLogit)/logLik(NullLogit)
+mcFadden
+```
+
+The McFadden value for this test is also very high at 0.941. So about 94.1% of the variation in wine type is explained by the checmical composition explanatory variables. Once again, this reaffirms the fact that this logistic regression model is a good fit. 
+
+
+## KNN
+
+```{r, echo=FALSE}
+#Data Preparation
+
+#Import the data
+wine_test <- na.omit(read.csv("test_data_wine.csv"))
+wine_train <- na.omit(read.csv("train_data_wine.csv"))
+
+# Only keep numeric variables
+wine_testscale <- wine_test[,3:13]
+wine_trainscale <- wine_train[,3:13]
+
+# Scale the data
+wine_testscale <- wine_testscale %>% scale()
+wine_trainscale <- wine_trainscale %>% scale()
+
+# Create y-labels
+wine.testLabels <- wine_test[,2]
+wine.trainLabels <- wine_train[,2]
+```
+
+```{r, echo=FALSE}
+chooseK = function(k, train_set, val_set, train_class, val_class){
+  # Build knn with k neighbors considered.
+  set.seed(1)
+  class_knn = knn(train = train_set,    
+                  test = val_set,       
+                  cl = train_class,     
+                  k = k) 
+                  #use.all = TRUE)#control ties between class assignments
+                                  #If true, all distances equal to the kth 
+                                  #largest are included
+  tab = table(class_knn, val_class)
+  # Calculate the accuracy.
+  accu = sum(tab[row(tab) == col(tab)]) / sum(tab)                         
+  cbind(k = k, accuracy = accu)
+}
+
+# The sapply() function plugs in several values into our chooseK function.
+# function(x)[function] allows you to apply a series of numbers
+# to a function without running a for() loop.
+knn_different_k = sapply(seq(1, 21, by = 2),#set k to be odd number from 1 to 21
+                         function(x) chooseK(x, 
+                                             train_set = wine_trainscale,
+                                             val_set = wine_testscale,
+                                             train_class = wine.trainLabels,
+                                             val_class = wine.testLabels))
+
+# Reformat the results to graph the results.
+#str(knn_different_k)
+knn_different_k = data.frame(k = knn_different_k[1,],
+                             accuracy = knn_different_k[2,])
+
+# Plot accuracy vs. k.
+loadPkg(ggplot2)
+ggplot(knn_different_k,
+       aes(x = k, y = accuracy)) +
+  geom_line(color = "orange", size = 1.5) +
+  geom_point(size = 3)
+```
+
+From this plot we could see the highest point of K value is at 1 and then it goest down. However, K value cannot not be 1 at the same time we avoild the value of K=2. Therefore, K=3 could give us the highest accuracy of the whole dataset.
+
+```{r, echo=FALSE}
+wine_pred <- knn(train = wine_trainscale, test = wine_testscale, cl=wine.trainLabels, k=3)
+
+WINEPREDCross <- CrossTable(wine.testLabels, wine_pred, prop.chisq = FALSE)
+confusionMatrix(table(wine.testLabels, wine_pred), cutoff = 0.5)
+KnnAccuracyStep1=0.993
+```
+
+We now run a crosstable with the value of K=3 to see the accuracy. From the crosstable we could see that the columns are the predicted values based on KNN while the rows are the actual values. There are 310 of those that are correctly predicted as red, 983 are correctly predicted as white wines. Since the accuracy is calculated by doing true positive + true negative)/total; therefore, the accuracy of KNN model in the whole wine group is 99.3%.
+
+
+## Decision Trees
+
+```{r, echo=FALSE}
+# Load the data
+wine_data_step1 <- na.omit(read.csv("final_data_wine.csv"))
+
+wine_data_step1_train <- subset(wine_data_step1,label==1)
+wine_data_step1_test <- subset(wine_data_step1,label==2)
+
+wine_data_step1_only_numeric <-wine_data_step1_train[,3:13]
+
+# Add 'type' back in
+wine_data_step1_with_type <- cbind(wine_data_step1_only_numeric,wine_data_step1_train$type)
+
+# Rename 'type' variable
+wine_data_step1_with_type <- wine_data_step1_with_type %>% rename(type=`wine_data_step1_train$type`)
+```
+
+```{r, echo=FALSE}
+dfFit <- rpart(type~., data=wine_data_step1_with_type, method="class", control = list(maxdepth = 4) )
+fancyRpartPlot(dfFit)
+```
+
+Above is a sample decision tree, where in we can observe the sequence of importance of features while determining the Wine TYpe such as total.sulfur.dioxide, chlorides and so on.
+
+**Pruning the trees**
+```{r, echo=FALSE}
+confusionMatrixResultDf = data.frame( Depth=numeric(0), Accuracy= numeric(0), Sensitivity=numeric(0), Specificity=numeric(0), Pos.Pred.Value=numeric(0), Neg.Pred.Value=numeric(0), Precision=numeric(0), Recall=numeric(0), F1=numeric(0), Prevalence=numeric(0), Detection.Rate=numeric(0), Detection.Prevalence=numeric(0), Balanced.Accuracy=numeric(0), row.names = NULL )
+
+for (deep in 2:6) {
+  kfit <- rpart(type~., data=wine_data_step1_with_type, method="class", control = list(maxdepth = deep) )
+  # 
+  cm = confusionMatrix( as.factor(predict(kfit, type = "class")), reference = as.factor(wine_data_step1_train$type )) # from caret library
+  # 
+  cmaccu = cm$overall['Accuracy']
+  # print( paste("Total Accuracy = ", cmaccu ) )
+  # 
+  cmt = data.frame(Depth=deep, Accuracy = cmaccu, row.names = NULL ) # initialize a row of the metrics 
+  cmt = cbind( cmt, data.frame( t(cm$byClass) ) ) # the dataframe of the transpose, with k valued added in front
+  confusionMatrixResultDf = rbind(confusionMatrixResultDf, cmt)
+  # print("Other metrics : ")
+}
+
+xkabledply(confusionMatrixResultDf, "Classification Trees summary with varying MaxDepth")
+```
+We can oberve that accuracy saturates once the max depth reached 4. Hence, we can set max-depth = 4 for better performance.
+
+```{r, echo=FALSE}
+dtFit <- rpart(type~., data=wine_data_step1_with_type, method="class", control = list(maxdepth = 4) )
+predDT <- predict(kfit, newdata=wine_data_step1_test[,3:13] , type = "class")
+
+cmDT <- CrossTable(wine_data_step1_test$type, predDT, prop.chisq = FALSE)
+cmDT = confusionMatrix( as.factor(predDT), reference = as.factor(wine_data_step1_test$type ))
+DTAccuracyStep1 = cmDT$overall['Accuracy']
+
+resultsDTStep1 = data.frame(Accuracy = DTAccuracyStep1, row.names = NULL ) # initialize a row of the metrics 
+resultsDTStep1 = cbind( resultsDTStep1, data.frame( t(cmDT$byClass) ))
+xkabledply(resultsDTStep1,"Decision Trees Results")
+```
+Decision trees are able to classify the wine into Red and White with an accuracy of **`r round(DTAccuracyStep1,3)`**.
+
+
+## Random Forest
+
+**Tuning the Trees Count**
+```{r, echo=FALSE}
+confusionMatrixResultDf = data.frame( Trees_Count=numeric(0), Accuracy= numeric(0), Sensitivity=numeric(0), Specificity=numeric(0), Pos.Pred.Value=numeric(0), Neg.Pred.Value=numeric(0), Precision=numeric(0), Recall=numeric(0), F1=numeric(0), Prevalence=numeric(0), Detection.Rate=numeric(0), Detection.Prevalence=numeric(0), Balanced.Accuracy=numeric(0), row.names = NULL )
+
+for (deep in c(250, 300, 350, 400, 450, 500, 550, 600)) {
+  rfit <- randomForest(as.factor(type) ~ .,data=wine_data_step1_with_type,mtry=4, ntree=deep)
+  # 
+  cm = confusionMatrix( as.factor(predict(rfit, type = "class")), reference = as.factor(wine_data_step1_train$type )) # from caret library
+  # 
+  cmaccu = cm$overall['Accuracy']
+  # print( paste("Total Accuracy = ", cmaccu ) )
+  # 
+  cmt = data.frame(Trees_Count=deep, Accuracy = cmaccu, row.names = NULL ) # initialize a row of the metrics 
+  cmt = cbind( cmt, data.frame( t(cm$byClass) ) ) # the dataframe of the transpose, with k valued added in front
+  confusionMatrixResultDf = rbind(confusionMatrixResultDf, cmt)
+  # print("Other metrics : ")
+}
+
+xkabledply(confusionMatrixResultDf, "Random Forest summary with varying Trees Count")
+```
+With trees count =250 we seem to be getting the optimised mix of performance parameters.
+
+```{r, echo=FALSE}
+rfFIT <- randomForest(as.factor(type) ~ .,data=wine_data_step1_with_type,mtry=4, ntree=250)
+predRF <- predict(rfFIT, newdata=wine_data_step1_test[,3:13],type="class")
+
+cmRF <- CrossTable(wine_data_step1_test$type, predRF, prop.chisq = FALSE)
+cmRF = confusionMatrix( as.factor(predRF), reference = as.factor(wine_data_step1_test$type ))
+RFAccuracyStep1 = cmRF$overall['Accuracy']
+
+resultsRFStep1 = data.frame(Accuracy = RFAccuracyStep1, row.names = NULL ) # initialize a row of the metrics 
+resultsRFStep1 = cbind( resultsRFStep1, data.frame( t(cmRF$byClass) ))
+xkabledply(resultsRFStep1,"Random Forest Results")
+```
+Random Forest is able to classify the wine into Red and White with an accuracy of **`r round(RFAccuracyStep1,3)`**.
+
+
+## Conclusion
+
+```{r, echo=FALSE}
+model_name_step1<-c("PCR","Logistic Regression","KNN","Decision Trees","Random Forest")
+model_accuracy_step1<-c(type_PCR_acc,type_log_acc,KnnAccuracyStep1,DTAccuracyStep1,RFAccuracyStep1)
+# Join the variables to create a data frame
+resultsStep1 <- data.frame(model_name_step1,model_accuracy_step1)
+names(resultsStep1) <- c("Model", "Accuracy")
+xkabledply(resultsStep1,"Wine Type Classification: All Model Comparison")
+```
+We can observe high accuarcy rate from all the models, and **Random Forest** seems to be the best classifier of wine in terms of Red and White.
+
+## Accuracy, Too good to be true!
+
+As per the above comparison table, we notice that every model is acheiving an accuracy somewhere close to 99%, which also makes us to ponder that may be both wine types vary significantly in terms of the predictor variables available to us. We performed two sample t test one by one for all of them to see if they actually are very different.
+```{r, echo=FALSE}
+columns_data <- c("fixed.acidity", "volatile.acidity","citric.acid", "residual.sugar","chlorides","free.sulfur.dioxide","total.sulfur.dioxide","density","pH","sulphates","alcohol")
+ttest_data <-na.omit(read.csv("final_data_wine.csv"))
+
+ttest_good_wine_data <- subset(ttest_data,quality_6=="good")
+white_wine_ttest <-subset(ttest_good_wine_data,type=="white")
+red_wine_ttest <-subset(ttest_good_wine_data,type=="red")
+
+variable_name <- vector()
+red_mean <- vector()
+white_mean <- vector()
+p_value <- vector()
+for (value in columns_data){
+  ttest_value = t.test(red_wine_ttest [,value], white_wine_ttest[,value])
+  variable_name <-append(variable_name,value)
+  red_mean <-append(red_mean,ttest_value$estimate[1])
+  white_mean <-append(white_mean,ttest_value$estimate[2])
+  p_value <-append(p_value,ttest_value$p.value)
+}
+
+# Join the variables to create a data frame
+ttest_table <- data.frame(variable_name,red_mean,white_mean,p_value)
+names(ttest_table) <- c("Variable", "Red Wine Mean","White Wine Mean","P-Value")
+xkabledply(ttest_table,"Wine Type Classification: How Different are both wines?")
+```
+We can clearly see that apart from alcohol content, both wine types are different in terms of other variables (p-value <0.05). This validates the reason why the classification models are so accurate.
+
+
+# Classifying Good and Bad Wine Given Type
+
+We now break our data into two dataframes, isolating data to each wine type, red and white.
+
+
+## Defining Good Vs Bad
+
+Lets plot and see how both wines quality is distributed individually.
+```{r, results=F,, echo=FALSE}
+red_wine_quality <-subset(ttest_data,type=="red")
+white_wine_quality <-subset(ttest_data,type=="white")
+
+p1 <- ggplot(data=red_wine_quality, aes(red_wine_quality$quality)) + 
+  geom_histogram(col='red',fill='red')+ 
+  labs(title="Red Wine", x="Quality", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),panel.grid.minor=element_blank())
+
+p2 <- ggplot(data=white_wine_quality, aes(white_wine_quality$quality)) + 
+  geom_histogram(col='yellow',fill='yellow',alpha=0.4)+ 
+  labs(title="White Wine", x="Quality", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),panel.grid.minor=element_blank())
+
+grid.arrange(p1, p2, nrow = 1)
+```
+
+To ensure that data is balanced for both the classes i.e., Good and Bad, we have kept Quality Rating = 5 as the threshold, which means wines with Quality > 5 are Good, while the rest are Bad.
+
+## K-Means
+
+```{r, echo=FALSE}
+##Model 2: Predicting Quality (Good/Bad) For Red Wine
+
+red_wine <- subset(data2,type=="red")
+
+
+#We know it's 2
+fviz_nbclust(red_wine,FUNcluster = kmeans)
+
+
+
+##Model 3: Predicting Quality (Good/Bad) For White Wine
+white_wine <- subset(data2,type=="white")
+
+#We know it's 2
+fviz_nbclust(white_wine,FUNcluster = kmeans)
+
+
+```
+
+Here we see two clusters are best for both wine groups.
+
+```{r , echo=FALSE}
+#model 2, red
+set.seed(123)
+km.res <- kmeans(red_wine, 2, nstart = 25)
+
+fviz_cluster(km.res,red_wine) 
+
+```
+
+In classifying good red wine, we see Dimension 1 tells us alot about the differences in clusters, indicating a strong pattern in the data. Dimension 2 does to an extent but nothing to crazy.
+
+
+```{r , echo=FALSE}
+set.seed(123)
+km.res <- kmeans(white_wine, 2, nstart = 25)
+
+
+fviz_cluster(km.res,white_wine) 
+
+```
+
+
+In classifying good white wine, we see Dimension 1 just like red wine tells us a lot about differences in clusters, indicating a strong pattern in the data. Dimension 2 contributes more to identifying the clusters to a greater degree in white wine.
+
+
+## PCA
+
+### Red Wine PCA
+
+First, we subsetted the data to include only red wine. Then we eliminated all non-numeric variables because we can't use them for PCA.
+
+```{r, include=FALSE}
+red <- wine %>% filter(type=='red')
+
+# Create subset of only numeric variables
+red_num <- red[,3:13]
+head(red_num)
+```
+
+```{r, include=FALSE}
+# Look at correlation & covariance matrix:
+cor(red_num)
+cov(red_num)
+
+# Scale the data, then look again:
+redscale = data.frame(scale(red_num))
+cor(redscale)
+cov(redscale)
+```
+
+After scaling the data, we created principal components out of the variables and looked at the distribution of each one:
+
+```{r, echo=FALSE}
+# Get the principal components:
+pr.red <- prcomp(redscale, scale=FALSE) # already scaled the data
+summary(pr.red)
+```
+
+We also looked at how the variables make up each component:
+
+```{r, echo=FALSE}
+pr.red$rotation
+```
+
+Using biplots is another way to see how the different variables make up each component. Here are a few examples:
+
+```{r, echo=FALSE}
+biplot(pr.red, scale=0)
+biplot(pr.red, 2:3, scale=0)
+biplot(pr.red, 3:4, scale=0)
+```
+
+We can also plot the cumulative proportion of variance explained by the principal components:
+
+```{r, echo=FALSE}
+# Plot cumulative proportion of variance explained
+pr.red.var <- (pr.red$sdev^2)
+pve.red <- pr.red.var/sum(pr.red.var)
+plot(cumsum(pve.red), xlab="Principal Component (standardized)", ylab ="Cumulative Proportion of Variance Explained",ylim=c(0,1),type="b")
+```
+
+As with the entire dataset 8 principal components explain about 95% of the variance. After this, the curve starts to level off, so including these first 8 components in a model is sufficient.
+
+### White Wine PCA
+
+Next, we subsetted the data to include only white wine. Then we eliminated all non-numeric variables because we can't use them for PCA.
+
+```{r, include=FALSE}
+white <- wine %>% filter(type=='white')
+
+# Create subset of only numeric variables
+white_num <- white[,3:13]
+head(white_num)
+```
+
+```{r, include=FALSE}
+# Look at correlation & covariance matrix:
+cor(white_num)
+cov(white_num)
+
+# Scale the data, then look again:
+whitescale = data.frame(scale(white_num))
+cor(whitescale)
+cov(whitescale)
+```
+
+After scaling the data, we created principal components out of the variables and looked at the distribution of each one:
+
+```{r, echo=FALSE}
+# Get the principal components:
+pr.white <- prcomp(whitescale, scale=FALSE) # already scaled the data
+summary(pr.white)
+```
+
+We also looked at how the variables make up each component:
+
+```{r, echo=FALSE}
+pr.white$rotation
+```
+
+Using biplots is another way to see how the different variables make up each component. Here are a few examples:
+
+```{r, echo=FALSE}
+biplot(pr.white, scale=0)
+biplot(pr.white, 2:3, scale=0)
+biplot(pr.white, 3:4, scale=0)
+```
+
+We can also plot the cumulative proportion of variance explained by the principal components:
+
+```{r, echo=FALSE}
+# Plot cumulative proportion of variance explained
+pr.white.var <- (pr.white$sdev^2)
+pve.white <- pr.white.var/sum(pr.white.var)
+plot(cumsum(pve.white), xlab="Principal Component (standardized)", ylab ="Cumulative Proportion of Variance Explained",ylim=c(0,1),type="b")
+```
+
+As with the entire dataset and the subset of red wine, 8 principal components is sufficient. The first 8 principal components explain about 93% of the variance.
+
+## PCR
+
+### Red Wine PCR
+
+Using the 8 principal components for red wine, we created another PCR model to classify whether the red wine is high or low quality.
+
+```{r, echo=FALSE}
+# Add quality back in
+red_w_quality <- cbind(redscale, red$quality_6)
+
+# Rename quality variable
+red_w_quality <- red_w_quality %>% rename(quality=`red$quality_6`)
+
+# Do PCR on first 8 components
+red_pcr <- PCRxform(red_w_quality,"quality")
+red_pcr_sub <- red_pcr[,1:9] # only keep first 8 PCs
+red_pcreg <- glm(quality ~ ., data=red_pcr_sub, family="binomial")
+xkabledply(red_pcreg)
+```
+
+### White Wine PCR
+
+Finally, we created a PCR model to classify whether white wine is high or low quality, with the first 8 principal components.
+
+```{r, echo=FALSE}
+# Add quality back in
+white_w_quality <- cbind(whitescale, white$quality_6)
+
+# Rename quality variable
+white_w_quality <- white_w_quality %>% rename(quality=`white$quality_6`)
+
+# Do PCR on first 8 components
+white_pcr <- PCRxform(white_w_quality,"quality")
+white_pcr_sub <- white_pcr[,1:9] # only keep first 8 PCs
+white_pcreg <- glm(quality ~ ., data=white_pcr_sub, family="binomial")
+xkabledply(white_pcreg)
+```
+
+## Logistic Regression
+
+### Red Wine
+
+We then created a full logistic regression model for red wine, using the same variables from the original data, to predict whether red wine is high or low quality:
+
+```{r, echo=FALSE}
+red_new <- red %>% select(-c(X,quality,type,label))
+redLogit <- glm(quality_6 ~ ., data=red_new, family="binomial")
+xkabledply(redLogit)
+```
+The results of this logistic regression model allow us to understand which factors improve the quality of red wine, categorized as either good or bad. We now have a fewer number of statistically significant features, which implies not all chemical composition factors are important for distinguishing between good and bad red wine. Overall, it seems free sulfur dioxide, suplphates and alcohol levels all increase the log likelihood of the red wine being categorized as 'good'. On the other hand, features such as volatile acidity, citric acid, chlorides and total sulfur dioxide all decrease the log likelihood of red wine being classified as good, thereby increasing the likelihood of it being bad. 
+
+We compared the PCR model with the full logistic regression model for red wine. The AIC for the full model is again lower than for the PCR model (`r round(redLogit$aic,1)` vs. `r round(red_pcreg$aic,1)`), indicating a better fit. In addition, using the confusion matrices below, we calculated the accuracy of each model:
+
+```{r, echo=FALSE, message=FALSE}
+# Confusion matrices
+confusion_matrix(red_pcreg)
+confusion_matrix(redLogit)
+```
+
+```{r, include=FALSE, message=FALSE}
+# Calculate accuracy
+red_PCR_acc <- (545+626)/1593
+red_log_acc <- (545+638)/1593
+red_PCR_acc
+red_log_acc
+```
+
+The accuracy of the PCR model is `r round(red_PCR_acc,3)`, while the accuracy of the full logistic regression model is slightly higher, at `r round(red_log_acc,3)`. This reinforces our finding that the full model is a better fit for the red wine.
+
+We can also look at other model evaluation metrics to determine how good this model is. First, we plot the AUC. 
+```{r, echo=FALSE}
+prob=predict(redLogit, type = c("response"))
+red_new$prob=prob
+h <- roc(quality_6~prob, data=red_new)
+auc(h) 
+plot(h)
+# unloadPkg(pROC) 
+```
+The AUC comes out to be 0.823, which is just above the 0.8 threshold. We can therefore classify this model as good. It is important to note that this AUC value is much lower than the earlier logistic regression classifying wine type, indicating this model is not as good.  
+We also determine the McFadden value for this model. 
+```{r , echo=FALSE}
+NullLogit <- glm(quality_6 ~ 1, data = red_new, family = "binomial")
+mcFadden = 1 - logLik(redLogit)/logLik(NullLogit)
+mcFadden
+```
+
+This comes out to be 0.251, which means our explanatory variables explain about 25.1% of the variation in quality of red wine. This is quite low compared to our earlier model for classifying wine types. So it appears this logistic regression model may not be a good fit. 
+
+### White Wine
+
+Next, we created a full logistic regression model for the white wine, using the same variables from the original data, to predict whether white wine is high or low quality:
+
+```{r, echo=FALSE}
+white_new <- white %>% select(-c(X,quality,type,label))
+whiteLogit <- glm(quality_6 ~ ., data=white_new, family="binomial")
+#summary(whiteLogit)
+xkabledply(whiteLogit)
+```
+The results of this model indicate which features are important for classiying white wine as 'good'. Residual sugar, free sulfur dioxide, pH, sulphates and alcohol all increase the log likelihood of white wine being 'good'. On the other hand, volatile acidity and density both decrease the log likelihood of white wine being good, thereby increasing the likelihood of it being bad. 
+
+
+We compared the PCR model with the full logistic regression model for white wine. The AIC for the full model is again lower than for the PCR model (`r round(whiteLogit$aic,1)` vs. `r round(white_pcreg$aic,1)`), indicating a better fit. In addition, using the confusion matrices below, we calculated the accuracy of each model:
+
+```{r, echo=FALSE, message=FALSE}
+# Confusion matrices
+confusion_matrix(white_pcreg)
+confusion_matrix(whiteLogit)
+```
+
+```{r, include=FALSE, message=FALSE}
+# Calculate accuracy
+white_PCR_acc <- (632+2887)/4870
+white_log_acc <- (809+2854)/4870
+white_PCR_acc
+white_log_acc
+```
+
+The accuracy of the PCR model is `r round(white_PCR_acc,3)`, while the accuracy of the full logistic regression model is slightly higher, at `r round(white_log_acc,3)`. This reinforces our finding that the full model is a better fit for white wine.
+
+Once again, we run some additional model evaluation metrics to assess the goodness of fit for our logistic regression model. 
+```{r, echo=FALSE}
+prob=predict(whiteLogit, type = c("response"))
+white_new$prob=prob
+h <- roc(quality_6~prob, data=white_new)
+auc(h) 
+plot(h)
+```
+The AOC for this model is 0.802, which again is very close to the 0.8 threshold. We can conclude this model appears to be a good fit but not as good as the previous model for classifying wine type. 
+
+```{r , echo=FALSE}
+NullLogit <- glm(quality_6 ~ 1, data = white_new, family = "binomial")
+mcFadden = 1 - logLik(whiteLogit)/logLik(NullLogit)
+mcFadden
+```
+The McFadden value for this model comes out to be 0.212, which means the explanatory variables explain about 21.2% of the variation in quality of white wine. Again, this value is quite low so this may not be a good model. 
+
+
+## KNN
+
+### Red Wine
+
+```{r, echo=FALSE}
+#Data Preparation
+
+##Import the data
+REDwine_test <- na.omit(read.csv("test_data_wine_RED.csv"))
+REDwine_train <- na.omit(read.csv("train_data_wine_RED.csv"))
+
+# Only keep numeric variables
+redwine_testscale <- REDwine_test[,3:13]
+redwine_trainscale <- REDwine_train[,3:13]
+
+# Scale the data
+redwine_testscale <- redwine_testscale %>% scale()
+redwine_trainscale <- redwine_trainscale %>% scale()
+
+# Create y-labels
+redwine.testLabels <- REDwine_test[,15]
+redwine.trainLabels <- REDwine_train[,15]
+```
+
+```{r, echo=FALSE}
+#KNN results
+
+chooseK = function(k, train_set, val_set, train_class, val_class){
+  
+  # Build knn with k neighbors considered.
+  set.seed(1)
+  class_knn = knn(train = train_set,    
+                  test = val_set,       
+                  cl = train_class,     
+                  k = k) 
+                  #use.all = TRUE)#control ties between class assignments
+                                  #If true, all distances equal to the kth 
+                                  #largest are included
+  tab = table(class_knn, val_class)
+  
+  # Calculate the accuracy.
+  accu = sum(tab[row(tab) == col(tab)]) / sum(tab)                         
+  cbind(k = k, accuracy = accu)
+}
+
+# The sapply() function plugs in several values into our chooseK function.
+# function(x)[function] allows you to apply a series of numbers
+# to a function without running a for() loop.
+knn_different_k = sapply(seq(1, 21, by = 2),#set k to be odd number from 1 to 21
+                         function(x) chooseK(x, 
+                                             train_set = redwine_trainscale,
+                                             val_set = redwine_testscale,
+                                             train_class = redwine.trainLabels,
+                                             val_class = redwine.testLabels))
+
+
+# Reformat the results to graph the results.
+#str(knn_different_k)
+knn_different_k = data.frame(k = knn_different_k[1,],
+                             accuracy = knn_different_k[2,])
+
+# Plot accuracy vs. k.
+# install.packages("ggplot2")
+loadPkg(ggplot2)
+ggplot(knn_different_k,
+       aes(x = k, y = accuracy)) +
+  geom_line(color = "orange", size = 1.5) +
+  geom_point(size = 3)
+```
+
+Since we have already splitted the whole wine group into red wine and white wine subgroup. We want to know how the wine types have impact on their qualities. Here we run the KNN of red wine only, the value of K=19 now could give us the highest accuracy.
+
+```{r, echo=FALSE}
+REDwine_pred <- knn(train = redwine_trainscale, test = redwine_testscale, cl=redwine.trainLabels, k=19)
+
+REDWINEPREDCross <- CrossTable(redwine.testLabels, REDwine_pred, prop.chisq = FALSE)
+confusionMatrix(table(redwine.testLabels, REDwine_pred), cutoff = 0.5)
+KnnAccuracyStep2Red=0.751
+```
+
+We run the crosstable with the K value of 19, the accuracy of KNN model in red wine is 75.4% which is lower than the whole dataset(99.3%). 
+
+Now, we run KNN same in white wine group and let's see how the result comes out:
+
+### White Wine
+
+```{r, echo=FALSE}
+##Import the data
+WHITEwine_test <- na.omit(read.csv("test_data_wine_WHITE.csv"))
+WHITEwine_train <- na.omit(read.csv("train_data_wine_WHITE.csv"))
+
+# Only keep numeric variables
+whitewine_testscale <- WHITEwine_test[,3:13]
+whitewine_trainscale <- WHITEwine_train[,3:13]
+
+# Scale the data
+whitewine_testscale <- whitewine_testscale %>% scale()
+whitewine_trainscale <- whitewine_trainscale %>% scale()
+
+# Create y-labels
+whitewine.testLabels <- WHITEwine_test[,15]
+whitewine.trainLabels <- WHITEwine_train[,15]
+```
+
+```{r, echo=FALSE}
+#KNN results
+
+chooseK = function(k, train_set, val_set, train_class, val_class){
+  
+  # Build knn with k neighbors considered.
+  set.seed(1)
+  class_knn = knn(train = train_set,    
+                  test = val_set,       
+                  cl = train_class,     
+                  k = k) 
+                  #use.all = TRUE)#control ties between class assignments
+                                  #If true, all distances equal to the kth 
+                                  #largest are included
+  tab = table(class_knn, val_class)
+  
+  # Calculate the accuracy.
+  accu = sum(tab[row(tab) == col(tab)]) / sum(tab)                         
+  cbind(k = k, accuracy = accu)
+}
+
+# The sapply() function plugs in several values into our chooseK function.
+# function(x)[function] allows you to apply a series of numbers
+# to a function without running a for() loop.
+knn_different_k = sapply(seq(1, 21, by = 2),#set k to be odd number from 1 to 21
+                         function(x) chooseK(x, 
+                                             train_set = whitewine_trainscale,
+                                             val_set = whitewine_testscale,
+                                             train_class = whitewine.trainLabels,
+                                             val_class = whitewine.testLabels))
+
+
+# Reformat the results to graph the results.
+#str(knn_different_k)
+knn_different_k = data.frame(k = knn_different_k[1,],
+                             accuracy = knn_different_k[2,])
+
+# Plot accuracy vs. k.
+# install.packages("ggplot2")
+loadPkg(ggplot2)
+ggplot(knn_different_k,
+       aes(x = k, y = accuracy)) +
+  geom_line(color = "orange", size = 1.5) +
+  geom_point(size = 3)
+```
+
+From the plot, we could see that the value of K=21 in white wine group reaches the highest point that could now gives us the highest accuracy.
+
+```{r, echo=FALSE}
+WHITEwine_pred <- knn(train = whitewine_trainscale, test = whitewine_testscale, cl=whitewine.trainLabels, k=21)
+
+WHITEWINEPREDCross <- CrossTable(whitewine.testLabels, WHITEwine_pred, prop.chisq = FALSE)
+confusionMatrix(table(whitewine.testLabels, WHITEwine_pred), cutoff = 0.5)
+KnnAccuracyStep2White=0.796
+```
+
+Therefore,we run the crosstable with the K value of 21, the accuracy of KNN model in white wine is 79.6% which is lower than the whole dataset(99.3%) but 4.2% higher that the accuracy in red wine group. Therefore, the KNN model result supports that the quality of white wine is slightly better than red wine.
+
+
+## Decision Trees
+
+### Red Wine
+
+```{r, include=FALSE}
+# Load the data
+wine_data_step2_red <- na.omit(read.csv("final_data_wine_RED.csv"))
+
+wine_data_step2_red_train <- subset(wine_data_step2_red,label==1)
+wine_data_step2_red_test <- subset(wine_data_step2_red,label==2)
+
+wine_data_step2_red_train_only_numeric <-wine_data_step2_red_train[,3:13]
+
+wine_data_step2_red_train_with_quality <- cbind(wine_data_step2_red_train_only_numeric, wine_data_step2_red_train$quality_6)
+
+wine_data_step2_red_train_with_quality <- wine_data_step2_red_train_with_quality %>% rename(quality=`wine_data_step2_red_train$quality_6`)
+```
+
+
+```{r, echo=FALSE}
+dfFitRed <- rpart(quality~., data=wine_data_step2_red_train_with_quality, method="class", control = list(maxdepth = 4) )
+fancyRpartPlot(dfFitRed)
+```
+
+Above is a sample decision tree, where in we can observe the sequence of importance of features while determining the Wine TYpe such as alcohol, sulphates and so on.
+
+**Pruning the trees**
+```{r, echo=FALSE}
+confusionMatrixResultDf = data.frame( Depth=numeric(0), Accuracy= numeric(0), Sensitivity=numeric(0), Specificity=numeric(0), Pos.Pred.Value=numeric(0), Neg.Pred.Value=numeric(0), Precision=numeric(0), Recall=numeric(0), F1=numeric(0), Prevalence=numeric(0), Detection.Rate=numeric(0), Detection.Prevalence=numeric(0), Balanced.Accuracy=numeric(0), row.names = NULL )
+
+for (deep in 5:9) {
+  kfit <- rpart(quality~., data=wine_data_step2_red_train_with_quality, method="class", control = list(maxdepth = deep) )
+  # 
+  cm = confusionMatrix( as.factor(predict(kfit, type = "class")), reference = as.factor(wine_data_step2_red_train_with_quality$quality )) # from caret library
+  # 
+  cmaccu = cm$overall['Accuracy']
+  # print( paste("Total Accuracy = ", cmaccu ) )
+  # 
+  cmt = data.frame(Depth=deep, Accuracy = cmaccu, row.names = NULL ) # initialize a row of the metrics 
+  cmt = cbind( cmt, data.frame( t(cm$byClass) ) ) # the dataframe of the transpose, with k valued added in front
+  confusionMatrixResultDf = rbind(confusionMatrixResultDf, cmt)
+  # print("Other metrics : ")
+}
+
+xkabledply(confusionMatrixResultDf, "Classification Trees summary with varying MaxDepth")
+```
+We can oberve that accuracy saturates once the max depth reached 7. Hence, we can set max-depth = 7 for better performance.
+
+```{r, echo=FALSE}
+dtFitRed <- rpart(quality~., data=wine_data_step2_red_train_with_quality, method="class", control = list(maxdepth = 7) )
+predDTRed <- predict(kfit, newdata=wine_data_step2_red_test[,3:13] , type = "class")
+
+cmDTRed <- CrossTable(wine_data_step2_red_test$quality_6, predDTRed, prop.chisq = FALSE)
+
+cmDTRed = confusionMatrix(as.factor(predDTRed), reference = as.factor(wine_data_step2_red_test$quality_6 ))
+
+DTAccuracyStep2Red = cmDTRed$overall['Accuracy']
+
+resultsDTStep2Red = data.frame(Accuracy = DTAccuracyStep2Red, row.names = NULL ) # initialize a row of the metrics 
+resultsDTStep2Red = cbind( resultsDTStep2Red, data.frame( t(cmDTRed$byClass) ))
+xkabledply(resultsDTStep2Red,"Decision Trees Results")
+```
+Decision trees are able to classify the red wine into Good and Bad with an accuracy of **`r round(DTAccuracyStep2Red,3)`**.
+
+### White Wine
+
+```{r, include=FALSE}
+# Load the data
+wine_data_step2_white <- na.omit(read.csv("final_data_wine_WHITE.csv"))
+head(wine_data_step2_white)
+dim(wine_data_step2_white)
+
+wine_data_step2_white_train <- subset(wine_data_step2_white,label==1)
+wine_data_step2_white_test <- subset(wine_data_step2_white,label==2)
+
+wine_data_step2_white_train_only_numeric <-wine_data_step2_white_train[,3:13]
+head(wine_data_step2_white_train_only_numeric)
+
+# Add quality back in
+wine_data_step2_white_train_with_quality <- cbind(wine_data_step2_white_train_only_numeric, wine_data_step2_white_train$quality_6)
+
+# Rename quality variable
+wine_data_step2_white_train_with_quality <- wine_data_step2_white_train_with_quality %>% rename(quality=`wine_data_step2_white_train$quality_6`)
+```
+
+
+
+```{r, echo=FALSE}
+dfFitWhite <- rpart(quality~., data=wine_data_step2_white_train_with_quality, method="class", control = list(maxdepth = 4) )
+fancyRpartPlot(dfFitWhite)
+```
+
+Above is a sample decision tree, where in we can observe the sequence of importance of features while determining the Wine TYpe such as alcohol, volatile.acidity and so on.
+
+**Pruning the trees**
+```{r, echo=FALSE}
+confusionMatrixResultDf = data.frame( Depth=numeric(0), Accuracy= numeric(0), Sensitivity=numeric(0), Specificity=numeric(0), Pos.Pred.Value=numeric(0), Neg.Pred.Value=numeric(0), Precision=numeric(0), Recall=numeric(0), F1=numeric(0), Prevalence=numeric(0), Detection.Rate=numeric(0), Detection.Prevalence=numeric(0), Balanced.Accuracy=numeric(0), row.names = NULL )
+
+for (deep in 5:9) {
+  kfit <- rpart(quality~., data=wine_data_step2_white_train_with_quality, method="class", control = list(maxdepth = deep) )
+  # 
+  cm = confusionMatrix( as.factor(predict(kfit, type = "class")), reference = as.factor(wine_data_step2_white_train_with_quality$quality )) # from caret library
+  # 
+  cmaccu = cm$overall['Accuracy']
+  # print( paste("Total Accuracy = ", cmaccu ) )
+  # 
+  cmt = data.frame(Depth=deep, Accuracy = cmaccu, row.names = NULL ) # initialize a row of the metrics 
+  cmt = cbind( cmt, data.frame( t(cm$byClass) ) ) # the dataframe of the transpose, with k valued added in front
+  confusionMatrixResultDf = rbind(confusionMatrixResultDf, cmt)
+  # print("Other metrics : ")
+}
+
+xkabledply(confusionMatrixResultDf, "Classification Trees summary with varying MaxDepth")
+```
+We can oberve that accuracy saturates once the max depth reached 6. Hence, we can set max-depth = 6 for better performance.
+
+```{r, echo=FALSE}
+dtFitWhite <- rpart(quality~., data=wine_data_step2_white_train_with_quality, method="class", control = list(maxdepth = 6) )
+predDTWhite <- predict(kfit, newdata=wine_data_step2_white_test[,3:13] , type = "class")
+
+cmDTWhite <- CrossTable(wine_data_step2_white_test$quality_6, predDTWhite, prop.chisq = FALSE)
+cmDTWhite = confusionMatrix( as.factor(predDTWhite), reference = as.factor(wine_data_step2_white_test$quality_6 ))
+DTAccuracyStep2White = cmDTWhite$overall['Accuracy']
+
+resultsDTStep2White = data.frame(Accuracy = DTAccuracyStep2White, row.names = NULL ) # initialize a row of the metrics 
+resultsDTStep2White = cbind( resultsDTStep2White, data.frame( t(cmDTWhite$byClass) ))
+xkabledply(resultsDTStep2White,"Decision Trees Results")
+```
+Decision trees are able to classify the white wine into Good and Bad with an accuracy of **`r round(DTAccuracyStep2White,3)`**.
+
+## Random Forest
+
+### Red Wine
+
+**Tuning the Trees Count**
+```{r, echo=FALSE}
+confusionMatrixResultDf = data.frame( Trees_Count=numeric(0), Accuracy= numeric(0), Sensitivity=numeric(0), Specificity=numeric(0), Pos.Pred.Value=numeric(0), Neg.Pred.Value=numeric(0), Precision=numeric(0), Recall=numeric(0), F1=numeric(0), Prevalence=numeric(0), Detection.Rate=numeric(0), Detection.Prevalence=numeric(0), Balanced.Accuracy=numeric(0), row.names = NULL )
+
+for (deep in c(250, 300, 350, 400, 450, 500, 550, 600)) {
+  rfit <- randomForest(as.factor(quality) ~ .,data=wine_data_step2_red_train_with_quality,mtry=7, ntree=deep)
+  # 
+  cm = confusionMatrix( as.factor(predict(rfit, type = "class")), reference = as.factor(wine_data_step2_red_train_with_quality$quality )) # from caret library
+  # 
+  cmaccu = cm$overall['Accuracy']
+  # print( paste("Total Accuracy = ", cmaccu ) )
+  # 
+  cmt = data.frame(Trees_Count=deep, Accuracy = cmaccu, row.names = NULL ) # initialize a row of the metrics 
+  cmt = cbind( cmt, data.frame( t(cm$byClass) ) ) # the dataframe of the transpose, with k valued added in front
+  confusionMatrixResultDf = rbind(confusionMatrixResultDf, cmt)
+  # print("Other metrics : ")
+}
+
+xkabledply(confusionMatrixResultDf, "Random Forest summary with varying Trees Count")
+```
+With trees count =350 we seem to be getting the optimised mix of performance parameters.
+
+```{r, echo=FALSE}
+rfFITRed <- randomForest(as.factor(quality) ~ .,data=wine_data_step2_red_train_with_quality,mtry=7, ntree=350)
+predRFRed <- predict(rfFITRed, newdata=wine_data_step2_red_test[,3:13],type="class")
+
+cmRFRed <- CrossTable(wine_data_step2_red_test$quality_6, predRFRed, prop.chisq = FALSE)
+cmRFRed = confusionMatrix( as.factor(predRFRed), reference = as.factor(wine_data_step2_red_test$quality_6) )
+RFAccuracyStep2Red = cmRFRed$overall['Accuracy']
+
+resultsRFStep2Red = data.frame(Accuracy = RFAccuracyStep2Red, row.names = NULL ) # initialize a row of the metrics 
+resultsRFStep2Red = cbind( resultsRFStep2Red, data.frame( t(cmRFRed$byClass) ))
+xkabledply(resultsRFStep2Red,"Random Forest Results")
+```
+Random Forest is able to classify the white wine into Good and Bad with an accuracy of **`r round(RFAccuracyStep2Red,3)`**.
+
+### White Wine
+
+**Tuning the Trees Count**
+```{r, echo=FALSE}
+confusionMatrixResultDf = data.frame( Trees_Count=numeric(0), Accuracy= numeric(0), Sensitivity=numeric(0), Specificity=numeric(0), Pos.Pred.Value=numeric(0), Neg.Pred.Value=numeric(0), Precision=numeric(0), Recall=numeric(0), F1=numeric(0), Prevalence=numeric(0), Detection.Rate=numeric(0), Detection.Prevalence=numeric(0), Balanced.Accuracy=numeric(0), row.names = NULL )
+
+for (deep in c(250, 300, 350, 400, 450, 500, 550, 600)) {
+  rfit <- randomForest(as.factor(quality) ~ .,data=wine_data_step2_white_train_with_quality,mtry=6, ntree=deep)
+  # 
+  cm = confusionMatrix( as.factor(predict(rfit, type = "class")), reference = as.factor(wine_data_step2_white_train_with_quality$quality) ) # from caret library
+  # 
+  cmaccu = cm$overall['Accuracy']
+  # print( paste("Total Accuracy = ", cmaccu ) )
+  # 
+  cmt = data.frame(Trees_Count=deep, Accuracy = cmaccu, row.names = NULL ) # initialize a row of the metrics 
+  cmt = cbind( cmt, data.frame( t(cm$byClass) ) ) # the dataframe of the transpose, with k valued added in front
+  confusionMatrixResultDf = rbind(confusionMatrixResultDf, cmt)
+  # print("Other metrics : ")
+}
+
+xkabledply(confusionMatrixResultDf, "Random Forest summary with varying Trees Count")
+```
+With trees count =500 we seem to be getting the optimised mix of performance parameters.
+
+```{r, echo=FALSE}
+rfFITWhite <- randomForest(as.factor(quality) ~ .,data=wine_data_step2_white_train_with_quality,mtry=6, ntree=500)
+predRFWhite <- predict(rfFITWhite, newdata=wine_data_step2_white_test[,3:13],type="class")
+
+cmRFWhite <- CrossTable(wine_data_step2_white_test$quality_6, predRFWhite, prop.chisq = FALSE)
+cmRFWhite = confusionMatrix( as.factor(predRFWhite), reference = as.factor(wine_data_step2_white_test$quality_6) )
+RFAccuracyStep2White = cmRFWhite$overall['Accuracy']
+
+resultsRFStep2White = data.frame(Accuracy = RFAccuracyStep2White, row.names = NULL ) # initialize a row of the metrics 
+resultsRFStep2White = cbind( resultsRFStep2White, data.frame( t(cmRFWhite$byClass) ))
+xkabledply(resultsRFStep2White,"Random Forest Results")
+```
+Random Forest is able to classify the white wine into Good and Bad with an accuracy of **`r round(RFAccuracyStep2White,3)`**.
+
+
+# Conclusion
+
+
+```{r, echo=FALSE}
+model_name_step2<-c("PCR","Logistic Regression","KNN","Decision Trees","Random Forest")
+model_accuracy_step2_red<-c(red_PCR_acc,red_log_acc,KnnAccuracyStep2Red,DTAccuracyStep2Red,RFAccuracyStep2Red)
+model_accuracy_step2_white<-c(white_PCR_acc,white_log_acc,KnnAccuracyStep2White,DTAccuracyStep2White,RFAccuracyStep2White)
+
+resultsStep2 <- data.frame(model_name_step2,model_accuracy_step2_red,model_accuracy_step2_white)
+names(resultsStep2) <- c("Model", "Accuracy: Red Wine", "Accuracy: White Wine")
+xkabledply(resultsStep2,"Wine Quality Classification: All Model Comparison")
+```
+**Random Forest** is performing the best not just in terms of wine type classification but also in the classification of wine into Good and Bad.
+
+
+# Bibliography
+
+The data are from the "Wine Quality" dataset on Kaggle: https://www.kaggle.com/rajyellow46/wine-quality.
+
+```{r, echo=FALSE}
+unloadPkg(regclass)
+```
